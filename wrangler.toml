@@ -1,0 +1,12 @@
+name = "tardigrade-worker"
+main = "src/index.ts"
+compatibility_date = "2023-10-30"
+node_compat = true
+
+[vars]
+TELEGRAM_BOT_TOKEN = ""
+GAS_API_URL = ""
+GAS_API_KEY = ""
+STAFF_GROUP_ID = ""
+STAFF_IDS = ""
+PRODUCTION_HOST_URL = ""

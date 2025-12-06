@@ -1,0 +1,22 @@
+{
+  "name": "tardigrade-telegram-worker",
+  "version": "0.1.0",
+  "description": "Telegram Bot on the Tardigrade Protocol: Cloudflare Workers + Google Sheets CMS.",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "wrangler dev --local",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "set-webhook": "npx ts-node scripts/set-webhook.ts"
+  },
+  "dependencies": {
+    "grammy": "^1.26.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240725.0",
+    "@types/node": "^20.14.12",
+    "dotenv": "^16.4.5",
+    "typescript": "^5.5.4",
+    "wrangler": "^3.67.1"
+  }
+}
