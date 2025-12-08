@@ -1,21 +1,20 @@
 /**
- * BORGPTRON-CORE v0.1.1 (Refactorizado)
+ * BORGPTRON-CORE v0.1.1 (FINAL MVP)
  * Protocolo: Tardigrade (Cloudflare Workers + Google Sheets)
  */
 import { Bot, Context as GrammyContext, webhookCallback } from "grammy";
 
-// --- 1. INTERFACES & TYPES (Satisfaciendo Type Safety) ---
+// --- 1. INTERFACES & CONFIG ---
 
 interface Env {
   TELEGRAM_BOT_TOKEN: string;
   GAS_API_URL: string;
   GAS_API_KEY: string;
   STAFF_GROUP_ID: string;
-  STAFF_IDS: string;
-  PRODUCTION_HOST_URL: string; 
+  // STAFF_IDS y PRODUCTION_HOST_URL opcionales para este MVP
 }
 
-// Definición estricta del Trabajo (Job)
+// Definición del Trabajo (Job)
 interface Job {
   ID?: string;
   chat_id: number | string;
@@ -35,14 +34,7 @@ type MyContext = GrammyContext & {
   waitUntil: (promise: Promise<any>) => void;
 };
 
-// Respuesta de la API GAS
-interface GasApiResponse {
-  ok: boolean;
-  result?: any;
-  error?: string;
-}
-
-// Estados de la Sesión
+// Estados
 const STEPS = {
   IDLE: 'IDLE',
   AWAIT_NAME: 'AWAIT_NAME',
@@ -72,7 +64,7 @@ const gasApiClient = (env: Env) => async (action: string, payload: any = {}) => 
       throw new Error(`HTTP Error: ${response.status}`);
     }
 
-    const data: GasApiResponse = await response.json();
+    const data: any = await response.json();
     if (!data.ok) {
       throw new Error(`GAS Error: ${data.error}`);
     }
@@ -89,7 +81,7 @@ async function updateSession(ctx: MyContext, step: string, tempData: any, isClea
   const userId = ctx.from?.id;
   if (!userId) return;
   
-  // No esperamos la respuesta para no bloquear al usuario (Fire & Forget)
+  // Fire & Forget para velocidad
   ctx.waitUntil(ctx.dbClient('WRITE_SESSION', { 
     userId, 
     currentStep: step, 
@@ -109,7 +101,7 @@ function renderProgressBar(progress: number): string {
 
 function registerHandlers(bot: Bot<MyContext>) {
     
-    // START
+    // COMANDO: /start
     bot.command(['start', 'agendar'], async (ctx) => {
       await updateSession(ctx, STEPS.AWAIT_NAME, {}, true);
       await ctx.reply(
@@ -118,7 +110,7 @@ function registerHandlers(bot: Bot<MyContext>) {
       );
     });
 
-    // ESTADO
+    // COMANDO: /estado
     bot.command('estado', async (ctx) => {
       const chatId = ctx.chat?.id;
       if (!chatId) return;
@@ -130,12 +122,12 @@ function registerHandlers(bot: Bot<MyContext>) {
           return ctx.reply("❌ No encontramos vehículos activos a tu nombre. Usa /agendar.");
         }
 
-        const job = jobs[jobs.length - 1]; // Último trabajo
-        const statusText = job.status.toUpperCase().replace(/_/g, ' ');
+        const job = jobs[jobs.length - 1]; // Último
+        const statusText = (job.status || 'UNKNOWN').toUpperCase().replace(/_/g, ' ');
         
         await ctx.reply(
           `🚗 *ESTADO DE TU VEHÍCULO*\n` +
-          `*Orden ID:* #${job.ID}\n` +
+          `*Orden ID:* #${job.ID || 'PEND'}\n` +
           `*Cliente:* ${job.client_name}\n` +
           `*Vehículo:* ${job.vehicle_info}\n\n` +
           `*Estatus:* ${statusText}\n` +
@@ -144,11 +136,12 @@ function registerHandlers(bot: Bot<MyContext>) {
           { parse_mode: 'Markdown' }
         );
       } catch (e) {
+        console.error(e);
         await ctx.reply("⚠️ Error consultando estado. Intenta más tarde.");
       }
     });
 
-    // COTIZAR (LEAD MAGNET)
+    // COMANDO: /cotizar
     bot.command('cotizar', async (ctx) => {
       const chatId = ctx.chat?.id;
       const clientName = ctx.from?.first_name || "Usuario";
@@ -163,30 +156,34 @@ function registerHandlers(bot: Bot<MyContext>) {
         is_lead: true
       };
 
-      // Guardar en DB
       ctx.waitUntil(ctx.dbClient('SAVE_JOB', { jobData }));
 
-      // Notificar al Staff
       if (ctx.env.STAFF_GROUP_ID) {
         ctx.waitUntil(ctx.api.sendMessage(
             ctx.env.STAFF_GROUP_ID, 
             `🚨 *NUEVO LEAD*\nCliente: ${clientName}\nInfo: ${jobData.vehicle_info}`,
             { parse_mode: 'Markdown' }
-        ));
+        ).catch(() => {}));
       }
       
       await ctx.reply("📝 Un técnico te contactará en breve para darte precio.");
     });
 
-    // MACHINE STATE (INPUT HANDLER)
+    // MANEJO DE TEXTO (State Machine)
     bot.on('message:text', async (ctx) => {
-      if (ctx.message.text.startsWith('/')) return; // Ignorar comandos
+      if (ctx.message.text.startsWith('/')) return;
 
       const userId = ctx.from?.id;
       const input = ctx.message.text.trim();
       
-      // Leer sesión actual
-      const session = await ctx.dbClient('READ_SESSION', { userId });
+      // Leer Sesión
+      let session;
+      try {
+         session = await ctx.dbClient('READ_SESSION', { userId });
+      } catch (e) {
+         session = { current_step: STEPS.IDLE, temp_data: {} };
+      }
+
       const step = session.current_step || STEPS.IDLE;
       const tempData = session.temp_data || {};
 
@@ -200,7 +197,7 @@ function registerHandlers(bot: Bot<MyContext>) {
             } else {
                 tempData.client_name = input;
                 nextStep = STEPS.AWAIT_VEHICLE;
-                replyText = "✅ Hola " + input + ". ¿Qué *marca, modelo y año* es el auto?";
+                replyText = `✅ Hola ${input}. ¿Qué *marca, modelo y año* es el auto?`;
                 await updateSession(ctx, nextStep, tempData);
             }
             break;
@@ -211,43 +208,38 @@ function registerHandlers(bot: Bot<MyContext>) {
             } else {
                 tempData.vehicle_info = input;
                 nextStep = STEPS.AWAIT_DESC;
-                replyText = "✅ Entendido. *Describe el problema o servicio* que necesitas.";
+                replyText = "✅ Entendido. *Describe el problema* que tiene.";
                 await updateSession(ctx, nextStep, tempData);
             }
             break;
 
         case STEPS.AWAIT_DESC:
-            // BUG FIX REQUESTED BY JULES: Usar campo 'notes' para la descripción
+            // FIX: Usamos 'notes' para la descripción
             const jobData: Job = {
                 chat_id: ctx.chat!.id,
                 client_name: tempData.client_name,
                 vehicle_info: tempData.vehicle_info,
-                notes: input, // <-- AQUÍ ESTÁ EL FIX
+                notes: input, 
                 status: 'SCHEDULED',
                 progress: 0,
                 is_lead: false
             };
 
-            // Guardar Job Final
             const savePromise = ctx.dbClient('SAVE_JOB', { jobData });
             
-            // Notificar Staff
             if (ctx.env.STAFF_GROUP_ID) {
                 const staffMsg = `🆕 *NUEVA CITA*\nCliente: ${jobData.client_name}\nAuto: ${jobData.vehicle_info}\nFalla: ${jobData.notes}`;
-                ctx.waitUntil(ctx.api.sendMessage(ctx.env.STAFF_GROUP_ID, staffMsg, { parse_mode: 'Markdown' }));
+                ctx.waitUntil(ctx.api.sendMessage(ctx.env.STAFF_GROUP_ID, staffMsg, { parse_mode: 'Markdown' }).catch(()=>{}));
             }
 
-            // Limpiar sesión
             await updateSession(ctx, STEPS.IDLE, {}, true);
             
-            // Respuesta final al usuario
-            await savePromise; // Esperar confirmación de guardado
+            await savePromise;
             replyText = "✅ ¡Listo! Tu cita ha sido registrada. Te avisaremos cuando empiece el trabajo.";
             nextStep = STEPS.IDLE;
             break;
 
         default:
-            // IDLE state, no action
             break;
       }
 
@@ -257,7 +249,7 @@ function registerHandlers(bot: Bot<MyContext>) {
     });
 }
 
-// --- 5. WORKER ENTRY ---
+// --- 5. WORKER ENTRY POINT ---
 
 export default {
   async fetch(request: Request, env: Env, executionContext: ExecutionContext): Promise<Response> {
