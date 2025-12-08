@@ -1,20 +1,12 @@
-/**
- * BORGPTRON-CORE v0.1.1 (FINAL MVP)
- * Protocolo: Tardigrade (Cloudflare Workers + Google Sheets)
- */
 import { Bot, Context as GrammyContext, webhookCallback } from "grammy";
-
-// --- 1. INTERFACES & CONFIG ---
 
 interface Env {
   TELEGRAM_BOT_TOKEN: string;
   GAS_API_URL: string;
   GAS_API_KEY: string;
   STAFF_GROUP_ID: string;
-  // STAFF_IDS y PRODUCTION_HOST_URL opcionales para este MVP
 }
 
-// Definición del Trabajo (Job)
 interface Job {
   ID?: string;
   chat_id: number | string;
@@ -27,22 +19,18 @@ interface Job {
   created_at?: string;
 }
 
-// Custom Context
 type MyContext = GrammyContext & { 
   env: Env;
   dbClient: (action: string, payload: any) => Promise<any>;
   waitUntil: (promise: Promise<any>) => void;
 };
 
-// Estados
 const STEPS = {
   IDLE: 'IDLE',
   AWAIT_NAME: 'AWAIT_NAME',
   AWAIT_VEHICLE: 'AWAIT_VEHICLE',
   AWAIT_DESC: 'AWAIT_DESC',
 } as const;
-
-// --- 2. DB CLIENT (Google Sheets Adapter) ---
 
 const gasApiClient = (env: Env) => async (action: string, payload: any = {}) => {
   if (!env.GAS_API_URL) throw new Error("GAS_API_URL not configured.");
@@ -60,14 +48,9 @@ const gasApiClient = (env: Env) => async (action: string, payload: any = {}) => 
       body: JSON.stringify(requestPayload),
     });
 
-    if (!response.ok) {
-      throw new Error(`HTTP Error: ${response.status}`);
-    }
-
+    if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
     const data: any = await response.json();
-    if (!data.ok) {
-      throw new Error(`GAS Error: ${data.error}`);
-    }
+    if (!data.ok) throw new Error(`GAS Error: ${data.error}`);
     return data.result;
   } catch (err) {
     console.error(`DB Action '${action}' failed:`, err);
@@ -75,19 +58,10 @@ const gasApiClient = (env: Env) => async (action: string, payload: any = {}) => 
   }
 };
 
-// --- 3. SESSION UTILS ---
-
 async function updateSession(ctx: MyContext, step: string, tempData: any, isClear: boolean = false): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
-  
-  // Fire & Forget para velocidad
-  ctx.waitUntil(ctx.dbClient('WRITE_SESSION', { 
-    userId, 
-    currentStep: step, 
-    tempData, 
-    isClear 
-  }));
+  ctx.waitUntil(ctx.dbClient('WRITE_SESSION', { userId, currentStep: step, tempData, isClear }));
 }
 
 function renderProgressBar(progress: number): string {
@@ -97,34 +71,21 @@ function renderProgressBar(progress: number): string {
   return `[${filled}${empty}] ${p}%`;
 }
 
-// --- 4. BOT HANDLERS ---
-
 function registerHandlers(bot: Bot<MyContext>) {
     
-    // COMANDO: /start
     bot.command(['start', 'agendar'], async (ctx) => {
       await updateSession(ctx, STEPS.AWAIT_NAME, {}, true);
-      await ctx.reply(
-        "🔧 *CITA INICIADA*\nPor favor, ingresa tu *nombre completo* para agendar.",
-        { parse_mode: 'Markdown' }
-      );
+      await ctx.reply("🔧 *CITA INICIADA*\nIngresa tu *nombre completo*.", { parse_mode: 'Markdown' });
     });
 
-    // COMANDO: /estado
     bot.command('estado', async (ctx) => {
       const chatId = ctx.chat?.id;
       if (!chatId) return;
-
       try {
         const jobs: Job[] = await ctx.dbClient('QUERY_JOBS', { chatId });
-        
-        if (!jobs || jobs.length === 0) {
-          return ctx.reply("❌ No encontramos vehículos activos a tu nombre. Usa /agendar.");
-        }
-
-        const job = jobs[jobs.length - 1]; // Último
+        if (!jobs || jobs.length === 0) return ctx.reply("❌ No hay vehículos activos. Usa /agendar.");
+        const job = jobs[jobs.length - 1];
         const statusText = (job.status || 'UNKNOWN').toUpperCase().replace(/_/g, ' ');
-        
         await ctx.reply(
           `🚗 *ESTADO DE TU VEHÍCULO*\n` +
           `*Orden ID:* #${job.ID || 'PEND'}\n` +
@@ -137,15 +98,13 @@ function registerHandlers(bot: Bot<MyContext>) {
         );
       } catch (e) {
         console.error(e);
-        await ctx.reply("⚠️ Error consultando estado. Intenta más tarde.");
+        await ctx.reply("⚠️ Error consultando estado.");
       }
     });
 
-    // COMANDO: /cotizar
     bot.command('cotizar', async (ctx) => {
       const chatId = ctx.chat?.id;
       const clientName = ctx.from?.first_name || "Usuario";
-      
       const jobData: Job = {
         chat_id: chatId!,
         client_name: clientName,
@@ -155,9 +114,7 @@ function registerHandlers(bot: Bot<MyContext>) {
         progress: 0,
         is_lead: true
       };
-
       ctx.waitUntil(ctx.dbClient('SAVE_JOB', { jobData }));
-
       if (ctx.env.STAFF_GROUP_ID) {
         ctx.waitUntil(ctx.api.sendMessage(
             ctx.env.STAFF_GROUP_ID, 
@@ -165,105 +122,89 @@ function registerHandlers(bot: Bot<MyContext>) {
             { parse_mode: 'Markdown' }
         ).catch(() => {}));
       }
-      
-      await ctx.reply("📝 Un técnico te contactará en breve para darte precio.");
+      await ctx.reply("📝 Un técnico te contactará en breve.");
     });
 
-    // MANEJO DE TEXTO (State Machine)
     bot.on('message:text', async (ctx) => {
       if (ctx.message.text.startsWith('/')) return;
-
       const userId = ctx.from?.id;
       const input = ctx.message.text.trim();
-      
-      // Leer Sesión
       let session;
       try {
          session = await ctx.dbClient('READ_SESSION', { userId });
       } catch (e) {
          session = { current_step: STEPS.IDLE, temp_data: {} };
       }
-
       const step = session.current_step || STEPS.IDLE;
       const tempData = session.temp_data || {};
-
       let nextStep = step;
       let replyText = "";
-      
       switch (step) {
         case STEPS.AWAIT_NAME:
-            if (input.length < 3) {
-                replyText = "⚠️ Nombre muy corto.";
-            } else {
+            if (input.length < 3) replyText = "⚠️ Nombre muy corto.";
+            else {
                 tempData.client_name = input;
                 nextStep = STEPS.AWAIT_VEHICLE;
                 replyText = `✅ Hola ${input}. ¿Qué *marca, modelo y año* es el auto?`;
                 await updateSession(ctx, nextStep, tempData);
             }
             break;
-
         case STEPS.AWAIT_VEHICLE:
-            if (input.length < 2) {
-                replyText = "⚠️ Info muy corta.";
-            } else {
+            if (input.length < 2) replyText = "⚠️ Info muy corta.";
+            else {
                 tempData.vehicle_info = input;
                 nextStep = STEPS.AWAIT_DESC;
                 replyText = "✅ Entendido. *Describe el problema* que tiene.";
                 await updateSession(ctx, nextStep, tempData);
             }
             break;
-
         case STEPS.AWAIT_DESC:
-            // FIX: Usamos 'notes' para la descripción
             const jobData: Job = {
                 chat_id: ctx.chat!.id,
                 client_name: tempData.client_name,
                 vehicle_info: tempData.vehicle_info,
-                notes: input, 
+                notes: input,
                 status: 'SCHEDULED',
                 progress: 0,
                 is_lead: false
             };
-
             const savePromise = ctx.dbClient('SAVE_JOB', { jobData });
-            
             if (ctx.env.STAFF_GROUP_ID) {
                 const staffMsg = `🆕 *NUEVA CITA*\nCliente: ${jobData.client_name}\nAuto: ${jobData.vehicle_info}\nFalla: ${jobData.notes}`;
                 ctx.waitUntil(ctx.api.sendMessage(ctx.env.STAFF_GROUP_ID, staffMsg, { parse_mode: 'Markdown' }).catch(()=>{}));
             }
-
             await updateSession(ctx, STEPS.IDLE, {}, true);
-            
             await savePromise;
-            replyText = "✅ ¡Listo! Tu cita ha sido registrada. Te avisaremos cuando empiece el trabajo.";
+            replyText = "✅ ¡Listo! Tu cita ha sido registrada.";
             nextStep = STEPS.IDLE;
             break;
-
         default:
             break;
       }
-
-      if (replyText) {
-          await ctx.reply(replyText, { parse_mode: 'Markdown' });
-      }
+      if (replyText) await ctx.reply(replyText, { parse_mode: 'Markdown' });
     });
 }
 
-// --- 5. WORKER ENTRY POINT ---
-
 export default {
   async fetch(request: Request, env: Env, executionContext: ExecutionContext): Promise<Response> {
-    const bot = new Bot<MyContext>(env.TELEGRAM_BOT_TOKEN);
-
+    const bot = new Bot<MyContext>(env.TELEGRAM_BOT_TOKEN, { 
+      botInfo: {
+        id: 6617778072,
+        is_bot: true,
+        first_name: "OGJR",
+        username: "OGJRbot",
+        can_join_groups: true,
+        can_read_all_group_messages: false,
+        supports_inline_queries: false
+      }
+    });
     bot.use(async (ctx, next) => {
       ctx.env = env;
       ctx.dbClient = gasApiClient(env);
       ctx.waitUntil = executionContext.waitUntil.bind(executionContext);
       await next();
     });
-
     registerHandlers(bot);
-
     return webhookCallback(bot, 'cloudflare-mod')(request);
   },
 };
