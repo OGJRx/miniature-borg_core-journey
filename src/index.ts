@@ -48,10 +48,22 @@ const gasApiClient = (env: Env) => async (action: string, payload: any = {}) => 
       body: JSON.stringify(requestPayload),
     });
 
-    if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
-    const data: any = await response.json();
-    if (!data.ok) throw new Error(`GAS Error: ${data.error}`);
-    return data.result;
+    const text = await response.text();
+
+    if (!response.ok) {
+        console.error(`GAS HTTP Error (${response.status}): ${text}`);
+        throw new Error(`HTTP Error: ${response.status}`);
+    }
+
+    try {
+        const data = JSON.parse(text);
+        if (!data.ok) throw new Error(`GAS Logic Error: ${data.error}`);
+        return data.result;
+    } catch (parseError) {
+        console.error(`GAS Response is NOT JSON: ${text}`);
+        throw new Error("Invalid JSON from GAS. Check logs.");
+    }
+    
   } catch (err) {
     console.error(`DB Action '${action}' failed:`, err);
     throw err;
