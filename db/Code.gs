@@ -1,217 +1,116 @@
-/**
- * DB/CMS LAYER: Google Apps Script (GAS) for Telegram Bot persistence.
- * This acts as the Serverless-compatible, zero-cost API middleware.
- *
- * NOTE: All data access here must be authorized by a hardcoded API_KEY.
- * The structure and logic mirror the PostgreSQL Schema from the specification.
- */
+const API_KEY = '9e7aebf067033c682583b3d4afcf341fee4c20fa';
+const SHEET_JOBS = 'JOBS';
+const SHEET_SESSIONS = 'SESSIONS';
 
-// --- CONFIGURATION ---
-const API_KEY = 'YOUR_GAS_API_KEY_SECRET'; // Must match the value in wrangler.toml/secrets
-const SS = SpreadsheetApp.getActiveSpreadsheet();
-const SHEETS = {
-  JOBS: SS.getSheetByName('JOBS'),
-  SESSIONS: SS.getSheetByName('SESSIONS'),
-};
-const JOB_HEADERS = ['ID', 'chat_id', 'client_name', 'vehicle_info', 'status', 'notes', 'progress', 'is_lead', 'created_at'];
-const SESSION_HEADERS = ['user_id', 'current_step', 'temp_data'];
-// --- UTILITIES ---
+function doPost(e) {
+  const lock = LockService.getScriptLock();
+  lock.tryLock(10000);
 
-/**
- * Validates the incoming request based on the API Key.
- */
-function validateRequest(key) {
-  if (key !== API_KEY) {
-    throw new Error('Unauthorized access.');
+  try {
+    if (!e || !e.postData || !e.postData.contents) {
+      return jsonResponse({ ok: false, error: 'Invalid payload' });
+    }
+    const data = JSON.parse(e.postData.contents);
+    if (data.apiKey !== API_KEY) {
+      return jsonResponse({ ok: false, error: 'Unauthorized' });
+    }
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const result = routeAction(ss, data);
+    return jsonResponse({ ok: true, result: result });
+
+  } catch (error) {
+    return jsonResponse({ ok: false, error: error.toString() });
+  } finally {
+    lock.releaseLock();
   }
 }
 
-/**
- * Converts sheet data rows into an array of objects based on headers.
- */
-function dataToObjects(data, headers) {
-  if (!data || data.length < 2) return [];
-  const objects = [];
-  const actualHeaders = data[0];
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    const obj = {};
-    actualHeaders.forEach((header, index) => {
-      if (headers.includes(header)) {
-        obj[header] = row[index];
-      }
-    });
-    // Add the Sheet row index for update operations (crucial for Sheets)
-    obj.rowIndex = i + 1;
-    objects.push(obj);
+function routeAction(ss, data) {
+  switch (data.action) {
+    case 'READ_SESSION': return getSession(ss, data.userId);
+    case 'WRITE_SESSION': return updateSession(ss, data.userId, data.currentStep, data.tempData, data.isClear);
+    case 'SAVE_JOB': return saveJob(ss, data.jobData);
+    case 'QUERY_JOBS': return queryJobs(ss, data.chatId);
+    default: throw new Error('Unknown action');
   }
-  return objects;
 }
 
-// --- SESSION CRUD (Bot State Machine) ---
-
-/**
- * Reads a user's current session state.
- */
-function readSession(userId) {
-  const sheet = SHEETS.SESSIONS;
+function getSession(ss, userId) {
+  const sheet = ss.getSheetByName(SHEET_SESSIONS);
   const data = sheet.getDataRange().getValues();
-  const sessions = dataToObjects(data, SESSION_HEADERS);
-  const session = sessions.find(s => String(s.user_id) === String(userId));
-  
-  if (session) {
-    // Parse temp_data JSON string back into an object
-    session.temp_data = session.temp_data ? JSON.parse(session.temp_data) : {};
-  } else {
-    // Return a default session object if none found
-    return { user_id: userId, current_step: 'IDLE', temp_data: {} };
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(userId)) {
+      return {
+        user_id: data[i][0],
+        current_step: data[i][1],
+        temp_data: data[i][2] ? JSON.parse(data[i][2]) : {}
+      };
+    }
   }
-  
-  return session;
+  return { current_step: 'IDLE', temp_data: {} };
 }
 
-/**
- * Writes or updates a user's session state.
- */
-function writeSession(userId, currentStep, tempData, isClear) {
-  const sheet = SHEETS.SESSIONS;
+function updateSession(ss, userId, step, tempData, isClear) {
+  const sheet = ss.getSheetByName(SHEET_SESSIONS);
   const data = sheet.getDataRange().getValues();
-  
-  const userIdStr = String(userId);
-  let targetRowIndex = -1;
+  let rowIndex = -1;
   for (let i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === userIdStr) {
-      targetRowIndex = i;
+    if (String(data[i][0]) === String(userId)) {
+      rowIndex = i + 1;
       break;
     }
   }
-  
-  const tempJson = isClear ? '' : JSON.stringify(tempData);
-  const newRow = [userIdStr, currentStep, tempJson];
-
-  if (targetRowIndex !== -1) {
-    // Update existing row (remember: data indices start from 0, sheet rows start from 1)
-    sheet.getRange(targetRowIndex + 1, 1, 1, newRow.length).setValues([newRow]);
-    return { status: 'UPDATED', userId };
+  const jsonTemp = JSON.stringify(tempData || {});
+  if (isClear) {
+    if (rowIndex > 0) sheet.getRange(rowIndex, 2, 1, 2).setValues([['IDLE', '{}']]);
   } else {
-    // Append new row
-    sheet.appendRow(newRow);
-    return { status: 'CREATED', userId };
+    if (rowIndex > 0) sheet.getRange(rowIndex, 2, 1, 2).setValues([[step, jsonTemp]]);
+    else sheet.appendRow([userId, step, jsonTemp]);
   }
+  return { success: true };
 }
 
-// --- JOBS CRUD (Business Data) ---
-
-/**
- * Saves a new job (appointment or lead).
- */
-function saveJob(jobData) {
-  const sheet = SHEETS.JOBS;
-  
-  // Find the next ID (simple incremental based on last row index, safe for single workshop MVP)
-  const lastRow = sheet.getLastRow();
-  const newId = lastRow === 0 ? 1 : sheet.getRange(lastRow, 1).getValue() + 1;
-  
-  const rowData = [
+function saveJob(ss, jobData) {
+  const sheet = ss.getSheetByName(SHEET_JOBS);
+  const newId = Math.floor(Math.random() * 1000000).toString(36).toUpperCase();
+  const row = [
     newId,
-    jobData.chat_id,
+    "'" + jobData.chat_id,
     jobData.client_name,
     jobData.vehicle_info,
-    jobData.status || 'SCHEDULED',
+    jobData.status,
     jobData.notes || '',
     jobData.progress || 0,
-    jobData.is_lead || false,
-    new Date()
+    jobData.is_lead ? true : false,
+    new Date().toISOString()
   ];
-  
-  sheet.appendRow(rowData);
-  return { status: 'CREATED', jobId: newId, chat_id: jobData.chat_id };
+  sheet.appendRow(row);
+  return { jobId: newId, status: 'saved' };
 }
 
-/**
- * Retrieves active jobs for status checks.
- */
-function queryJobs(chatId) {
-  const sheet = SHEETS.JOBS;
+function queryJobs(ss, chatId) {
+  const sheet = ss.getSheetByName(SHEET_JOBS);
   const data = sheet.getDataRange().getValues();
-  const jobs = dataToObjects(data, JOB_HEADERS);
-  
-  // Filter for active jobs associated with the given chatId
-  const activeJobs = jobs.filter(job => 
-    String(job.chat_id) === String(chatId) && 
-    job.status !== 'DELIVERED' && 
-    job.status !== 'CANCELLED'
-  );
-  
-  return activeJobs;
-}
-
-/**
- * Updates a job's status/progress/notes via rowIndex found in query.
- * IMPORTANT: This assumes the input includes the rowIndex, retrieved during read operations.
- */
-function updateJobStatus(updateData) {
-  const sheet = SHEETS.JOBS;
-  const rowIndex = updateData.rowIndex; // Essential for updating Sheets data
-  
-  if (!rowIndex) throw new Error("Missing rowIndex for update.");
-
-  const rowValues = sheet.getRange(rowIndex, 1, 1, sheet.getLastColumn()).getValues()[0];
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  
-  const job = {};
-  headers.forEach((header, index) => {
-    job[header] = rowValues[index];
-  });
-  
-  // Apply updates
-  job.status = updateData.status || job.status;
-  job.notes = updateData.notes !== undefined ? updateData.notes : job.notes;
-  job.progress = updateData.progress !== undefined ? updateData.progress : job.progress;
-
-  // Rebuild the updated row data based on headers to ensure correct column placement
-  const newRow = headers.map(header => job[header] !== undefined ? job[header] : '');
-  
-  sheet.getRange(rowIndex, 1, 1, newRow.length).setValues([newRow]);
-  return job; // Return updated job object (includes chat_id, status)
-}
-
-// --- POST/GET HANDLER (API Gateway) ---
-
-function doPost(e) {
-  try {
-    const request = JSON.parse(e.postData.contents);
-    validateRequest(request.apiKey);
-    
-    const action = request.action;
-    let result;
-
-    switch (action) {
-      case 'READ_SESSION':
-        result = readSession(request.userId);
-        break;
-      case 'WRITE_SESSION':
-        result = writeSession(request.userId, request.currentStep, request.tempData, request.isClear);
-        break;
-      case 'SAVE_JOB':
-        result = saveJob(request.jobData);
-        break;
-      case 'QUERY_JOBS':
-        result = queryJobs(request.chatId);
-        break;
-      case 'UPDATE_JOB':
-        result = updateJobStatus(request.updateData);
-        break;
-      default:
-        throw new Error(`Unknown action: ${action}`);
+  const results = [];
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][1]) === String(chatId)) {
+      results.push({
+        ID: data[i][0],
+        chat_id: data[i][1],
+        client_name: data[i][2],
+        vehicle_info: data[i][3],
+        status: data[i][4],
+        notes: data[i][5],
+        progress: data[i][6],
+        is_lead: data[i][7],
+        created_at: data[i][8]
+      });
     }
-
-    return ContentService.createTextOutput(JSON.stringify({ ok: true, result }))
-      .setMimeType(ContentService.MimeType.JSON);
-
-  } catch (error) {
-    Logger.log(error);
-    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: error.message }))
-      .setMimeType(ContentService.MimeType.JSON);
   }
+  return results;
+}
+
+function jsonResponse(payload) {
+  return ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
 }
