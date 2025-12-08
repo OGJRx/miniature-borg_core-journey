@@ -61,7 +61,13 @@ const gasApiClient = (env: Env) => async (action: string, payload: any = {}) => 
 async function updateSession(ctx: MyContext, step: string, tempData: any, isClear: boolean = false): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
-  ctx.waitUntil(ctx.dbClient('WRITE_SESSION', { userId, currentStep: step, tempData, isClear }));
+  
+  try {
+      await ctx.dbClient('WRITE_SESSION', { userId, currentStep: step, tempData, isClear });
+  } catch (error) {
+      console.error("Error guardando sesión:", error);
+      await ctx.reply("⚠️ Error de conexión con la memoria. Intenta de nuevo.");
+  }
 }
 
 function renderProgressBar(progress: number): string {
@@ -179,6 +185,9 @@ function registerHandlers(bot: Bot<MyContext>) {
             nextStep = STEPS.IDLE;
             break;
         default:
+            if (!input.startsWith('/')) {
+                await ctx.reply(`⚠️ No sé qué hacer. Mi estado actual es: ${step}.\nEscribe /start para reiniciar.`);
+            }
             break;
       }
       if (replyText) await ctx.reply(replyText, { parse_mode: 'Markdown' });
