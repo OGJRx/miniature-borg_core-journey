@@ -17,6 +17,7 @@ function doPost(e) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const result = routeAction(ss, data);
+    SpreadsheetApp.flush();
     return jsonResponse({ ok: true, result: result });
 
   } catch (error) {
@@ -39,8 +40,10 @@ function routeAction(ss, data) {
 function getSession(ss, userId) {
   const sheet = ss.getSheetByName(SHEET_SESSIONS);
   const data = sheet.getDataRange().getValues();
+  const targetId = String(userId);
+  
   for (let i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === String(userId)) {
+    if (String(data[i][0]) === targetId) {
       return {
         user_id: data[i][0],
         current_step: data[i][1],
@@ -55,18 +58,26 @@ function updateSession(ss, userId, step, tempData, isClear) {
   const sheet = ss.getSheetByName(SHEET_SESSIONS);
   const data = sheet.getDataRange().getValues();
   let rowIndex = -1;
+  const targetId = String(userId);
+
   for (let i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === String(userId)) {
+    if (String(data[i][0]) === targetId) {
       rowIndex = i + 1;
       break;
     }
   }
+
   const jsonTemp = JSON.stringify(tempData || {});
+  const safeUserId = "'" + targetId;
+
   if (isClear) {
     if (rowIndex > 0) sheet.getRange(rowIndex, 2, 1, 2).setValues([['IDLE', '{}']]);
   } else {
-    if (rowIndex > 0) sheet.getRange(rowIndex, 2, 1, 2).setValues([[step, jsonTemp]]);
-    else sheet.appendRow([userId, step, jsonTemp]);
+    if (rowIndex > 0) {
+      sheet.getRange(rowIndex, 2, 1, 2).setValues([[step, jsonTemp]]);
+    } else {
+      sheet.appendRow([safeUserId, step, jsonTemp]);
+    }
   }
   return { success: true };
 }
@@ -93,8 +104,10 @@ function queryJobs(ss, chatId) {
   const sheet = ss.getSheetByName(SHEET_JOBS);
   const data = sheet.getDataRange().getValues();
   const results = [];
+  const targetId = String(chatId);
+  
   for (let i = 1; i < data.length; i++) {
-    if (String(data[i][1]) === String(chatId)) {
+    if (String(data[i][1]) === targetId) {
       results.push({
         ID: data[i][0],
         chat_id: data[i][1],
