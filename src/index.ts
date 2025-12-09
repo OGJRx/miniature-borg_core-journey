@@ -197,9 +197,16 @@ function registerHandlers(bot: Bot<MyContext>) {
             nextStep = STEPS.IDLE;
             break;
         default:
-            if (!input.startsWith('/')) {
-                await ctx.reply(`⚠️ No sé qué hacer. Mi estado actual es: ${step}.\nEscribe /start para reiniciar.`);
-            }
+            // Si el input empieza con '/', es un comando y lo ignoramos (lo maneja bot.command)
+            if (input.startsWith('/')) return;
+
+            // DIAGNÓSTICO EN TIEMPO REAL PARA EL USUARIO
+            await ctx.reply(
+                `⚠️ *Desincronización detectada.*\n` +
+                `El cerebro del sistema reporta estado: \`${step}\`\n` +
+                `Pero tú esperabas otra cosa. Por favor escribe /start para forzar el reinicio.`,
+                { parse_mode: 'Markdown' }
+            );
             break;
       }
       if (replyText) await ctx.reply(replyText, { parse_mode: 'Markdown' });
@@ -216,7 +223,9 @@ export default {
         username: "OGJRbot",
         can_join_groups: true,
         can_read_all_group_messages: false,
-        supports_inline_queries: false
+        supports_inline_queries: false,
+        can_connect_to_business: false,
+        has_main_web_app: false
       }
     });
     bot.use(async (ctx, next) => {
