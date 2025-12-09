@@ -27,6 +27,10 @@ function doPost(e) {
   }
 }
 
+function cleanId(id) {
+  return String(id).replace(/^'/, '');
+}
+
 function routeAction(ss, data) {
   switch (data.action) {
     case 'READ_SESSION': return getSession(ss, data.userId);
@@ -40,12 +44,13 @@ function routeAction(ss, data) {
 function getSession(ss, userId) {
   const sheet = ss.getSheetByName(SHEET_SESSIONS);
   const data = sheet.getDataRange().getValues();
-  const targetId = String(userId);
+  const targetId = cleanId(userId);
   
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === targetId) {
+  for (let i = data.length - 1; i >= 1; i--) {
+    const rowId = cleanId(data[i][0]);
+    if (rowId === targetId) {
       return {
-        user_id: data[i][0],
+        user_id: rowId,
         current_step: data[i][1],
         temp_data: data[i][2] ? JSON.parse(data[i][2]) : {}
       };
@@ -58,10 +63,10 @@ function updateSession(ss, userId, step, tempData, isClear) {
   const sheet = ss.getSheetByName(SHEET_SESSIONS);
   const data = sheet.getDataRange().getValues();
   let rowIndex = -1;
-  const targetId = String(userId);
+  const targetId = cleanId(userId);
 
   for (let i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === targetId) {
+    if (cleanId(data[i][0]) === targetId) {
       rowIndex = i + 1;
       break;
     }
@@ -104,10 +109,10 @@ function queryJobs(ss, chatId) {
   const sheet = ss.getSheetByName(SHEET_JOBS);
   const data = sheet.getDataRange().getValues();
   const results = [];
-  const targetId = String(chatId);
+  const targetId = cleanId(chatId);
   
   for (let i = 1; i < data.length; i++) {
-    if (String(data[i][1]) === targetId) {
+    if (cleanId(data[i][1]) === targetId) {
       results.push({
         ID: data[i][0],
         chat_id: data[i][1],
