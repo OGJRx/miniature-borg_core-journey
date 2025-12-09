@@ -28,7 +28,7 @@ function doPost(e) {
 }
 
 function cleanId(id) {
-  return String(id).replace(/^'/, '');
+  return String(id).replace(/^'/, '').trim();
 }
 
 function routeAction(ss, data) {
@@ -65,7 +65,7 @@ function updateSession(ss, userId, step, tempData, isClear) {
   let rowIndex = -1;
   const targetId = cleanId(userId);
 
-  for (let i = 1; i < data.length; i++) {
+  for (let i = data.length - 1; i >= 1; i--) {
     if (cleanId(data[i][0]) === targetId) {
       rowIndex = i + 1;
       break;
