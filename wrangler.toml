@@ -1,4 +1,17 @@
-name = "tardigrade-worker"
+name = "borgptron-core"
 main = "src/index.ts"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
+
+# [VARS] VARIABLES DE ENTORNO CRÍTICAS
+[vars]
+CALENDAR_URL = "https://calendar.app.google/kiKNzNkCxpJiXXdQA"
+# Puedes cambiar esto por tu usuario de soporte real cuando quieras
+SUPPORT_URL = "https://t.me/AdminSoporte"
+
+# BINDING DE BASE DE DATOS D1
+[[d1_databases]]
+binding = "DB"
+database_name = "borgptron-db"
+# IMPORTANTE: El DevOps Humano reemplazará esto manualmente
+database_id = "REPLACE_WITH_REAL_ID_FROM_BORGACCIONES"

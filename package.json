@@ -1,22 +1,21 @@
 {
-  "name": "tardigrade-telegram-worker",
-  "version": "0.1.0",
-  "description": "Telegram Bot on the Tardigrade Protocol: Cloudflare Workers + Google Sheets CMS.",
+  "name": "borgptron-core-titanium",
+  "version": "2.0.0",
+  "description": "Borgptron V2: Stateless Telegram Bot. Stack: Cloudflare Workers + Grammy + D1 (SQLite).",
   "main": "src/index.ts",
   "scripts": {
-    "start": "wrangler dev --local",
+    "start": "wrangler dev",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit",
-    "set-webhook": "npx ts-node scripts/set-webhook.ts"
+    "db:create": "wrangler d1 create borgptron-db",
+    "db:migrate": "wrangler d1 execute borgptron-db --file=schema.sql"
   },
   "dependencies": {
-    "grammy": "^1.26.0"
+    "grammy": "^1.30.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240725.0",
-    "@types/node": "^20.14.12",
-    "dotenv": "^16.4.5",
-    "typescript": "^5.5.4",
-    "wrangler": "^3.67.1"
+    "@cloudflare/workers-types": "^4.20240925.0",
+    "typescript": "^5.6.2",
+    "wrangler": "^3.78.0",
+    "@types/node": "^20.0.0"
   }
 }
